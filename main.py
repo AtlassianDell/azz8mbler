@@ -31,14 +31,10 @@ def parse_expr(expr, location_counter, pass_num):
     if not original_expr:
         raise ValueError("Empty expression where a value was expected.")
     
-    # Replace '#' with the current location_counter first
     expr_with_lc = expr_upper.replace('#', str(location_counter))
 
-    # Pattern to find potential symbols (alphanumeric, underscores)
-    # or literals ($hex, %binary, 'char')
     def resolve_part(match):
         part = match.group(0)
-        # Try to parse as a literal
         if part.startswith('$'):
             return str(int(part[1:], 16))
         elif part.startswith('%'):
@@ -48,28 +44,24 @@ def parse_expr(expr, location_counter, pass_num):
                 return str(ord(part[1]))
             else:
                 raise ValueError(f"Invalid character literal: {part}")
-        # If it's a symbol, look it up in the symbol_table
-        elif part.isalpha() or '_' in part: # It's a symbol, try to resolve from symbol table
+        elif part.isalpha() or '_' in part:
             if part in symbol_table:
                 return str(symbol_table[part])
             else:
                 if pass_num == 2:
                     raise ValueError(f"Undefined symbol: '{part}' in expression '{original_expr}'")
-                return '0' # During pass 1, return 0 for unresolved symbols
-        return part # Return as is if it's an operator or number
+                return '0'
+        return part
 
-    # Replace symbols/literals in the expression with their resolved values
-    # This regex now looks for labels (alphanumeric, underscore), or specific literal formats
     resolved_expr = re.sub(r'\b[A-Z_][A-Z0-9_]*\b|\$[0-9A-F]+|%[01]+|\'[^\']\'', resolve_part, expr_with_lc)
     
     try:
-        # Use a safe environment for eval
         safe_eval_globals = {'__builtins__': None}
         return int(eval(resolved_expr, safe_eval_globals))
     except (NameError, TypeError, SyntaxError) as e:
         if pass_num == 2:
             raise ValueError(f"Error evaluating expression '{original_expr}' after symbol resolution: {e}. Resolved to: '{resolved_expr}'")
-        return 0 # During pass 1, return 0 for unresolvable expressions
+        return 0
     except Exception as e:
         raise ValueError(f"Unexpected error evaluating expression '{original_expr}': {e}. Resolved to: '{resolved_expr}'") from e
 
@@ -245,7 +237,7 @@ def get_opcode(mnemonic, operands, location_counter, pass_num):
                 op_base = {'AND': 0xA0, 'XOR': 0xA8, 'OR': 0xB0, 'CP': 0xB8,
                            'ADD': 0x80, 'SUB': 0x90, 'ADC': 0x88, 'SBC': 0x98}
                 return [op_base[mnemonic] | reg_map_8bit[op]], 1
-            elif op == '(HL)': # ADD A,(HL), SUB A,(HL), etc.
+            elif op == '(HL)':
                 op_base = {'AND': 0xA6, 'XOR': 0xAE, 'OR': 0xB6, 'CP': 0xBE,
                            'ADD': 0x86, 'SUB': 0x96, 'ADC': 0x8E, 'SBC': 0x9E}
                 if mnemonic in op_base:
@@ -259,15 +251,8 @@ def get_opcode(mnemonic, operands, location_counter, pass_num):
         elif num_parts == 2:
             dest, src = parts[0], parts[1]
             if mnemonic == 'ADD' and dest == 'HL' and src in reg_map_16bit:
-                # Add instruction for HL, BC/DE/HL/SP
-                # ADD HL, BC -> 0x09
-                # ADD HL, DE -> 0x19
-                # ADD HL, HL -> 0x29
-                # ADD HL, SP -> 0x39
                 if src in reg_map_16bit:
                     return [0x09 | (reg_map_16bit[src] << 4)], 1
-            # Add other two-operand ADD/SUB/ADC/SBC variants here if needed
-            # For example, ADD A, (IX+d) or similar.
             else:
                 raise ValueError(f"Invalid operands for {mnemonic}: {operands}")
 

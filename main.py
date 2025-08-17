@@ -4,12 +4,9 @@ import struct
 import re
 import os
 
-# Global state for the assembler passes
 symbol_table = {}
-# This set tracks files currently being included to detect circular includes
 included_files = set()
 
-# Z80 register and condition maps
 reg_map_8bit = {
     'B': 0b000, 'C': 0b001, 'D': 0b010, 'E': 0b011,
     'H': 0b100, 'L': 0b101, 'F': 0b110, 'A': 0b111,
@@ -30,17 +27,12 @@ abs_jump_cond_map = {
 }
 
 def parse_expr(expr, location_counter, pass_num):
-    """
-    Parses and evaluates a numerical expression. Supports decimal, hex ($),
-    binary (%), character literals ('), and labels.
-    """
     original_expr = expr.strip()
     expr_upper = original_expr.upper()
 
     if not original_expr:
         raise ValueError("Empty expression where a value was expected.")
     
-    # Replace location counter symbol '#' with its value
     expr_with_lc = expr_upper.replace('#', str(location_counter))
 
     def resolve_part(match):
@@ -63,11 +55,9 @@ def parse_expr(expr, location_counter, pass_num):
                 return '0'
         return part
 
-    # Use regex to find and replace all parts of the expression
     resolved_expr = re.sub(r'\b[A-Z_][A-Z0-9_]*\b|\$[0-9A-F]+|%[01]+|\'[^\']\'', resolve_part, expr_with_lc)
     
     try:
-        # Use a safe eval with restricted globals
         safe_eval_globals = {'__builtins__': None}
         return int(eval(resolved_expr, safe_eval_globals))
     except (NameError, TypeError, SyntaxError) as e:
@@ -78,9 +68,6 @@ def parse_expr(expr, location_counter, pass_num):
         raise ValueError(f"Unexpected error evaluating expression '{original_expr}': {e}. Resolved to: '{resolved_expr}'") from e
 
 def get_opcode(mnemonic, operands, location_counter, pass_num):
-    """
-    Generates the opcode and size for a given Z80 instruction.
-    """
     
     if mnemonic == 'LD':
         parts = [p.strip().upper() for p in operands.split(',')]
@@ -268,11 +255,11 @@ def get_opcode(mnemonic, operands, location_counter, pass_num):
                            'ADD': 0x86, 'SUB': 0x96, 'ADC': 0x8E, 'SBC': 0x9E}
                 if mnemonic in op_base:
                     return [op_base[mnemonic]], 1
-            else: # Immediate 8-bit value
+            else:
                 val = parse_expr(op, location_counter, pass_num)
                 if pass_num == 1: return [], 2
                 op_base = {'AND': 0xE6, 'XOR': 0xEE, 'OR': 0xF6, 'CP': 0xFE,
-                            'ADD': 0xC6, 'SUB': 0xD6, 'ADC': 0xCE, 'SBC': 0xDE}
+                               'ADD': 0xC6, 'SUB': 0xD6, 'ADC': 0xCE, 'SBC': 0xDE}
                 return [op_base[mnemonic], val & 0xFF], 2
 
         elif num_parts == 2:
@@ -328,10 +315,6 @@ def get_opcode(mnemonic, operands, location_counter, pass_num):
     raise ValueError(f"Unknown mnemonic or invalid operands: {mnemonic} {operands}")
 
 def assemble(source_code, pass_num=1, current_dir='.'):
-    """
-    Assembles a source code string in two passes.
-    Handles pseudo-ops and includes other files.
-    """
     global symbol_table
     
     lines = source_code.splitlines()
@@ -343,7 +326,6 @@ def assemble(source_code, pass_num=1, current_dir='.'):
         line = lines[i]
         line = line.strip()
         
-        # Remove comments
         if ';' in line:
             line = line[:line.find(';')]
         
@@ -351,25 +333,43 @@ def assemble(source_code, pass_num=1, current_dir='.'):
             i += 1
             continue
             
-        line_match = re.match(r'^\s*(?:(\w+):)?\s*(?:(\w+))?\s*(.*)$', line, re.IGNORECASE)
-        if not line_match:
+        parts = line.split(maxsplit=2)
+        label, mnemonic, operands = None, None, ''
+        
+        if not parts:
             i += 1
             continue
-        
-        label, mnemonic, operands = line_match.groups()
-        
+
+        first_part = parts[0].upper()
+        if first_part.endswith(':'):
+            label = first_part[:-1]
+            if len(parts) > 1:
+                mnemonic = parts[1].upper()
+                if len(parts) > 2:
+                    operands = parts[2].upper()
+        else:
+            pseudo_ops_with_label = ['EQU', 'ORG']
+            if len(parts) > 1 and parts[1].upper() in pseudo_ops_with_label:
+                label = first_part
+                mnemonic = parts[1].upper()
+                if len(parts) > 2:
+                    operands = parts[2]
+            else:
+                mnemonic = first_part
+                if len(parts) > 1:
+                    operands = parts[1]
+
         if label:
             label = label.upper()
         if mnemonic:
             mnemonic = mnemonic.upper()
         if operands:
-            operands = operands.strip()
+            operands = operands.upper()
         
         if mnemonic == 'INCLUDE':
             if not operands:
                 raise ValueError("INCLUDE directive requires a filename.")
             
-            # Extract filename from quotes
             file_match = re.match(r'^["\'](.+)["\']$', operands)
             if not file_match:
                 raise ValueError("INCLUDE filename must be a quoted string.")
@@ -386,13 +386,8 @@ def assemble(source_code, pass_num=1, current_dir='.'):
                 with open(filepath, 'r') as f:
                     included_source = f.read()
                 
-                # Recursively call assemble to get the lines of the included file
-                # and insert them into the current line list.
-                # This flattens the file structure before proceeding with assembly.
                 included_lines = included_source.splitlines()
                 lines = lines[:i+1] + included_lines + lines[i+1:]
-                # We need to re-evaluate the same line index in the next iteration,
-                # as a new line was inserted.
                 i += 1
                 included_files.remove(filepath)
 
@@ -406,12 +401,24 @@ def assemble(source_code, pass_num=1, current_dir='.'):
             
             continue
 
-        if pass_num == 1 and label:
+        if pass_num == 1 and label and not mnemonic in ['EQU', 'ORG']:
             if label in symbol_table:
                 raise ValueError(f"Duplicate label: {label} on line {i + 1}")
             symbol_table[label] = location_counter
         
-        if mnemonic == 'DB':
+        if mnemonic == 'EQU' and label:
+            value = parse_expr(operands, location_counter, pass_num)
+            if pass_num == 1:
+                symbol_table[label] = value
+        elif mnemonic == 'ORG':
+            value = parse_expr(operands, location_counter, pass_num)
+            if pass_num == 1:
+                location_counter = value
+            elif pass_num == 2:
+                if value > location_counter:
+                    assembled_code.extend([0x00] * (value - location_counter))
+                location_counter = value
+        elif mnemonic == 'DB':
             items = []
             current_item = ""
             in_quote = False
@@ -462,10 +469,6 @@ def assemble(source_code, pass_num=1, current_dir='.'):
             location_counter += size
             if pass_num == 2:
                 assembled_code.extend([fill_value & 0xFF] * size)
-        elif mnemonic == 'EQU' and label:
-            value = parse_expr(operands, location_counter, pass_num)
-            if pass_num == 1:
-                symbol_table[label] = value
         elif mnemonic:
             try:
                 opcodes, size = get_opcode(mnemonic, operands, location_counter, pass_num)
@@ -502,9 +505,6 @@ def main():
         except ValueError as e:
             print(f"Error during Pass 1: {e}", file=sys.stderr)
             sys.exit(1)
-        
-        print(f"Symbol Table: {symbol_table}")
-
         print("Pass 2: Generating machine code...")
         try:
             machine_code = assemble(source_code, pass_num=2, current_dir=os.path.dirname(args.infile) or '.')
